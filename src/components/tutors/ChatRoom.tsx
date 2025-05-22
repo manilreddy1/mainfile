@@ -54,7 +54,7 @@ const ChatRoom = () => {
   const [newMessage, setNewMessage] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(true);
-  const [hasLoaded, setHasLoaded] = useState(false); // Track initial load completion
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [sending, setSending] = useState(false);
   const [isAccessAllowed, setIsAccessAllowed] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
@@ -68,21 +68,19 @@ const ChatRoom = () => {
 
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const previousMessagesLength = useRef(messages.length); // Track previous message count
 
   const isTeacher = profile?.user_type === "teacher";
   const isStudent = profile?.user_type === "student";
   const mode = isTeacher ? "teacher" : "student";
 
+  // Fetch contact data (student for teacher, tutor for student)
   useEffect(() => {
     const fetchContactData = async () => {
       if (!user || !profile) return;
 
       try {
         if (mode === "teacher") {
-          if (!studentId) {
-            throw new Error("Student ID is missing.");
-          }
+          if (!studentId) throw new Error("Student ID is missing.");
 
           const { data, error } = await supabase
             .from("profiles")
@@ -92,21 +90,16 @@ const ChatRoom = () => {
             .single();
 
           if (error) throw error;
+          if (!data) throw new Error("Student not found.");
 
-          if (data) {
-            setContact({
-              id: data.id,
-              name: `${data.first_name} ${data.last_name}`,
-              image: data.avatar_url || "https://i.pravatar.cc/150?img=2",
-            });
-            setContactName(`${data.first_name} ${data.last_name}`);
-          } else {
-            throw new Error("Student not found.");
-          }
+          setContact({
+            id: data.id,
+            name: `${data.first_name} ${data.last_name}`,
+            image: data.avatar_url || "https://i.pravatar.cc/150?img=2",
+          });
+          setContactName(`${data.first_name} ${data.last_name}`);
         } else {
-          if (!tutorId) {
-            throw new Error("Tutor ID is missing.");
-          }
+          if (!tutorId) throw new Error("Tutor ID is missing.");
 
           const { data, error } = await supabase
             .from("profiles")
@@ -116,24 +109,21 @@ const ChatRoom = () => {
             .single();
 
           if (error) throw error;
+          if (!data) throw new Error("Tutor not found.");
 
-          if (data) {
-            setContact({
-              id: data.id,
-              name: `${data.first_name} ${data.last_name}`,
-              image: data.avatar_url || "https://i.pravatar.cc/150?img=1",
-              subject: data.subject || "Unknown",
-            });
-            setContactName(`${data.first_name} ${data.last_name}`);
-          } else {
-            throw new Error("Tutor not found.");
-          }
+          setContact({
+            id: data.id,
+            name: `${data.first_name} ${data.last_name}`,
+            image: data.avatar_url || "https://i.pravatar.cc/150?img=1",
+            subject: data.subject || "Unknown",
+          });
+          setContactName(`${data.first_name} ${data.last_name}`);
         }
       } catch (error: any) {
         console.error(`Error fetching ${mode === "teacher" ? "student" : "tutor"} data:`, error);
         toast({
           title: "Error",
-          description: `Failed to load ${mode === "teacher" ? "student" : "tutor"} data. Please try again.`,
+          description: `Failed to load ${mode === "teacher" ? "student" : "tutor"} data.`,
           variant: "destructive",
         });
         navigate(mode === "teacher" ? "/teacher-dashboard" : "/search");
@@ -143,6 +133,7 @@ const ChatRoom = () => {
     fetchContactData();
   }, [tutorId, studentId, user, profile, mode, navigate]);
 
+  // Check access, load messages, and set up real-time subscription
   useEffect(() => {
     const checkAccess = async () => {
       if (!user || !profile) {
@@ -216,8 +207,9 @@ const ChatRoom = () => {
       }
 
       await loadMessages();
-      setHasLoaded(true); // Mark initial load as complete
+      setHasLoaded(true);
 
+      // Real-time subscription for messages
       const channel = supabase
         .channel(`chat:${tutorId}:${studentId || user.id}`)
         .on(
@@ -226,12 +218,21 @@ const ChatRoom = () => {
             event: "INSERT",
             schema: "public",
             table: "messages",
-            filter: `tutor_id=eq.${tutorId},student_id=eq.${studentId || user.id}`,
+            filter: `tutor_id=eq.${tutorId}`,
           },
           (payload) => {
             const newMsg = payload.new;
-            console.log("ChatRoom: New message received:", newMsg);
+            // Ensure the message belongs to this chat
+            if (
+              (mode === "teacher" && newMsg.student_id !== studentId) ||
+              (mode === "student" && newMsg.student_id !== user.id)
+            ) {
+              return;
+            }
+
+            // Avoid duplicates with optimistic updates
             if (newMsg.sender_type === mode) return;
+
             const formattedMsg: Message = {
               id: newMsg.id,
               sender:
@@ -260,6 +261,7 @@ const ChatRoom = () => {
     checkAccess();
   }, [user, profile, tutorId, studentId, mode, getAssignedTutors, navigate, contact]);
 
+  // Load existing messages
   const loadMessages = async () => {
     if (!user) return;
 
@@ -272,13 +274,9 @@ const ChatRoom = () => {
         .order("created_at", { ascending: true });
 
       if (mode === "teacher") {
-        query
-          .eq("tutor_id", tutorId)
-          .eq("student_id", studentId);
+        query.eq("tutor_id", tutorId).eq("student_id", studentId);
       } else {
-        query
-          .eq("student_id", user.id)
-          .eq("tutor_id", tutorId);
+        query.eq("student_id", user.id).eq("tutor_id", tutorId);
       }
 
       const { data, error } = await query;
@@ -309,7 +307,7 @@ const ChatRoom = () => {
       console.error("Error loading messages:", error);
       toast({
         title: "Error",
-        description: "Failed to load messages. Please try again.",
+        description: "Failed to load messages.",
         variant: "destructive",
       });
     } finally {
@@ -317,19 +315,14 @@ const ChatRoom = () => {
     }
   };
 
-  // MODIFIED useEffect for scrolling behavior
+  // Auto-scroll to the latest message
   useEffect(() => {
-    if (hasLoaded && messages.length > previousMessagesLength.current) {
-      const lastMessage = messages[messages.length - 1];
-      // Only scroll automatically if the new message is from the other party (not mine).
-      // This prevents scrolling when the current user sends a message.
-      if (lastMessage && !lastMessage.isMine) {
-        endOfMessagesRef.current?.scrollIntoView({ behavior: "auto" });
-      }
+    if (hasLoaded) {
+      endOfMessagesRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-    previousMessagesLength.current = messages.length;
   }, [messages, hasLoaded]);
 
+  // Send a message
   const handleSendMessage = async () => {
     if ((!newMessage.trim() && !file) || !user) return;
 
@@ -337,7 +330,6 @@ const ChatRoom = () => {
       setSending(true);
 
       let fileUrl = null;
-
       if (file) {
         const fileExt = file.name.split(".").pop();
         const fileName = `${user.id}/${Date.now()}.${fileExt}`;
@@ -348,19 +340,17 @@ const ChatRoom = () => {
 
         if (uploadError) throw uploadError;
 
-        const { data } = supabase.storage
-          .from("chat_files")
-          .getPublicUrl(fileName);
-
+        const { data } = supabase.storage.from("chat_files").getPublicUrl(fileName);
         fileUrl = data.publicUrl;
       }
 
+      const tempId = `temp-${Date.now()}`;
       const optimisticMsg: Message = {
-        id: `temp-${Date.now()}`,
+        id: tempId,
         sender: profile?.first_name || "Me",
         text: newMessage,
         timestamp: new Date(),
-        isMine: true, // Important: marking user's own message
+        isMine: true,
         file_url: fileUrl,
       };
       setMessages((prev) => [...prev, optimisticMsg]);
@@ -371,26 +361,34 @@ const ChatRoom = () => {
         content: newMessage,
         file_url: fileUrl,
         sender_type: mode,
+        created_at: new Date().toISOString(),
       };
 
-      const { error } = await supabase
+      const { data: insertedMsg, error } = await supabase
         .from("messages")
-        .insert(messageData);
+        .insert(messageData)
+        .select()
+        .single();
 
       if (error) throw error;
+
+      // Update the optimistic message with the real ID
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === tempId
+            ? { ...msg, id: insertedMsg.id, timestamp: new Date(insertedMsg.created_at) }
+            : msg
+        )
+      );
 
       setNewMessage("");
       setFile(null);
     } catch (error) {
       console.error("Error sending message:", error);
-      // Remove optimistic message on failure if it's still the temporary one.
-      // This requires careful handling of the temp ID if multiple messages are sent quickly.
-      // For simplicity, the current filter might remove the wrong one if IDs collide (unlikely with Date.now())
-      // A more robust way would be to store the temp ID and use it.
-      setMessages((prev) => prev.filter((msg) => !msg.id.startsWith("temp-") || msg.id !== `temp-${Date.now()}`)); // Adjusted for potential stale Date.now()
+      setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
       toast({
         title: "Error",
-        description: "Failed to send message. Please try again.",
+        description: "Failed to send message.",
         variant: "destructive",
       });
     } finally {
@@ -398,6 +396,7 @@ const ChatRoom = () => {
     }
   };
 
+  // Handle file selection
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
@@ -425,16 +424,58 @@ const ChatRoom = () => {
     }
   };
 
+  // Start a video call with the tutor as admin
   const startVideoCall = () => {
     toast({
       title: "Video call initiated",
       description: "Setting up your video call connection...",
     });
+
+    const roomName = `tutor-${tutorId}-${Date.now()}`;
+    const jitsiDomain = "meet.jit.si";
+    const jitsiUrl = new URL(`https://${jitsiDomain}/${roomName}`);
+
+    // Add user info to identify the tutor
+    jitsiUrl.searchParams.append("userInfo.name", profile?.first_name || "Tutor");
+    jitsiUrl.searchParams.append("userInfo.email", profile?.email || "tutor@example.com");
+    jitsiUrl.searchParams.append("config.startWithVideoMuted", "false");
+    jitsiUrl.searchParams.append("config.startWithAudioMuted", "false");
+
+    // Update the session with the meeting link
+    const updateSessionWithLink = async () => {
+      try {
+        const { data: session } = await supabase
+          .from("scheduled_sessions")
+          .select("id")
+          .eq("tutor_id", tutorId)
+          .eq("student_id", mode === "teacher" ? studentId : user.id)
+          .eq("status", "scheduled")
+          .gte("start_time", new Date().toISOString())
+          .order("start_time", { ascending: true })
+          .limit(1);
+
+        if (session && session.length > 0) {
+          await supabase
+            .from("scheduled_sessions")
+            .update({
+              meeting_link: jitsiUrl.toString(),
+              status: "in_progress",
+            })
+            .eq("id", session[0].id);
+        }
+      } catch (error) {
+        console.error("Error updating session with meeting link:", error);
+      }
+    };
+
+    updateSessionWithLink();
+
     setTimeout(() => {
-      window.open(`https://meet.jit.si/tutor-${tutorId}-${Date.now()}`, "_blank");
+      window.open(jitsiUrl.toString(), "_blank");
     }, 1500);
   };
 
+  // Schedule a session
   const handleScheduleSession = async () => {
     if (!sessionTitle || !sessionDate || !sessionTime || !sessionDuration || !user) {
       toast({
@@ -447,10 +488,21 @@ const ChatRoom = () => {
 
     try {
       const startTime = new Date(`${sessionDate}T${sessionTime}`);
+      const currentTime = new Date();
+
+      if (startTime <= currentTime) {
+        toast({
+          title: "Invalid date/time",
+          description: "Please schedule the session for a future date and time.",
+          variant: "destructive",
+        });
+        return;
+      }
+
       const endTime = new Date(startTime);
       endTime.setMinutes(endTime.getMinutes() + parseInt(sessionDuration));
 
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("scheduled_sessions")
         .insert({
           student_id: mode === "teacher" ? studentId : user.id,
@@ -459,9 +511,19 @@ const ChatRoom = () => {
           start_time: startTime.toISOString(),
           end_time: endTime.toISOString(),
           status: "scheduled",
-        });
+        })
+        .select()
+        .single();
 
       if (error) throw error;
+
+      // Notify the other party via a message
+      await supabase.from("messages").insert({
+        student_id: mode === "teacher" ? studentId : user.id,
+        tutor_id: tutorId,
+        content: `New session scheduled: "${sessionTitle}" on ${startTime.toLocaleString()}`,
+        sender_type: mode,
+      });
 
       toast({
         title: "Session scheduled",
@@ -476,19 +538,18 @@ const ChatRoom = () => {
       console.error("Error scheduling session:", error);
       toast({
         title: "Error",
-        description: "Failed to schedule session. Please try again.",
+        description: "Failed to schedule session.",
         variant: "destructive",
       });
     }
   };
 
+  // End a video session
   const endVideoSession = async (sessionId: string) => {
     try {
       await supabase
         .from("scheduled_sessions")
-        .update({
-          status: "completed",
-        })
+        .update({ status: "completed" })
         .eq("id", sessionId);
 
       setCompletedSessionId(sessionId);
@@ -496,26 +557,60 @@ const ChatRoom = () => {
 
       toast({
         title: "Session ended",
-        description: "Please take a moment to rate your experience.",
+        description: "Please rate your experience.",
       });
     } catch (error) {
       console.error("Error ending session:", error);
       toast({
         title: "Error",
-        description: "Failed to end session. Please try again.",
+        description: "Failed to end session.",
         variant: "destructive",
       });
     }
   };
 
+  // Auto-start sessions and check for completed sessions
   useEffect(() => {
-    const checkForCompletedSessions = async () => {
+    const checkForSessions = async () => {
       if (!user || !contact) return;
 
       try {
         const teacherId = mode === "student" ? contact.id : profile?.id;
         const studentIdForQuery = mode === "teacher" ? studentId : user.id;
 
+        // Auto-start scheduled sessions for the tutor
+        const now = new Date();
+        const { data: sessionsToStart } = await supabase
+          .from("scheduled_sessions")
+          .select("id, start_time, meeting_link")
+          .eq("student_id", studentIdForQuery)
+          .eq("tutor_id", tutorId)
+          .eq("status", "scheduled")
+          .lte("start_time", now.toISOString())
+          .limit(1);
+
+        if (sessionsToStart && sessionsToStart.length > 0) {
+          const session = sessionsToStart[0];
+          if (mode === "teacher" && !session.meeting_link) {
+            const roomName = `tutor-${tutorId}-${Date.now()}`;
+            const jitsiUrl = `https://meet.jit.si/${roomName}`;
+            await supabase
+              .from("scheduled_sessions")
+              .update({
+                meeting_link: jitsiUrl,
+                status: "in_progress",
+              })
+              .eq("id", session.id);
+
+            toast({
+              title: "Starting Session",
+              description: "Your scheduled session is starting now.",
+            });
+            window.open(jitsiUrl, "_blank");
+          }
+        }
+
+        // Check for completed sessions to rate
         const oneDayAgo = new Date();
         oneDayAgo.setDate(oneDayAgo.getDate() - 1);
 
@@ -543,15 +638,16 @@ const ChatRoom = () => {
           }
         }
       } catch (error) {
-        console.error("Error checking for completed sessions:", error);
+        console.error("Error checking for sessions:", error);
       }
     };
 
     if (user && tutorId && (mode === "teacher" ? studentId : true)) {
-      checkForCompletedSessions();
+      checkForSessions();
     }
   }, [user, tutorId, studentId, mode, contact, profile]);
 
+  // Loading state
   if (loading) {
     return (
       <div className="flex flex-col h-screen items-center justify-center">
@@ -561,6 +657,7 @@ const ChatRoom = () => {
     );
   }
 
+  // Access denied state
   if (!isAccessAllowed) {
     return (
       <div className="flex flex-col h-screen items-center justify-center p-4">
@@ -679,11 +776,7 @@ const ChatRoom = () => {
                 ({(file.size / (1024 * 1024)).toFixed(2)} MB)
               </span>
             </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setFile(null)}
-            >
+            <Button variant="ghost" size="sm" onClick={() => setFile(null)}>
               <X size={16} />
             </Button>
           </div>
